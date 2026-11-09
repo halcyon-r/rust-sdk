@@ -99,7 +99,10 @@ Use [`ClientServiceExt::serve_with_lifecycle`](crates/rmcp/src/service/client.rs
 select another lifecycle explicitly:
 
 ```rust, ignore
-use rmcp::{ClientLifecycleMode, ClientServiceExt, ProtocolVersion, model::ClientConfig};
+use rmcp::{
+    ClientLifecycleMode, ClientServiceExt,
+    model::{ClientConfig, ProtocolVersion},
+};
 
 // Start directly with server/discover and include client metadata on every request.
 let client = ClientConfig::default()
@@ -402,22 +405,18 @@ impl ServerHandler for MyServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
-        Ok(ListResourcesResult {
-            resources: vec![
-                Resource::new("file:///config.json", "config"),
-                Resource::new("memo://insights", "insights"),
-            ],
-            next_cursor: None,
-            meta: None,
-        })
+        Ok(ListResourcesResult::with_all_items(vec![
+            Resource::new("file:///config.json", "config"),
+            Resource::new("memo://insights", "insights"),
+        ]))
     }
 
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, McpError> {
-        match request.uri.as_str() {
+    ) -> Result<ReadResourceResponse, McpError> {
+        let result = match request.uri.as_str() {
             "file:///config.json" => Ok(ReadResourceResult::new(vec![
                 ResourceContents::text(r#"{"key": "value"}"#, &request.uri),
             ])),
@@ -450,7 +449,8 @@ impl ServerHandler for MyServer {
                 "resource_not_found",
                 Some(json!({ "uri": request.uri })),
             )),
-        }
+        }?;
+        Ok(result.into())
     }
 
     async fn list_resource_templates(
@@ -460,13 +460,9 @@ impl ServerHandler for MyServer {
     ) -> Result<ListResourceTemplatesResult, McpError> {
         // Declare a URI template with a `{user_id}` parameter. Clients expand it
         // (e.g. `users://42/profile`) and pass the concrete URI to `read_resource`.
-        Ok(ListResourceTemplatesResult {
-            resource_templates: vec![
-                ResourceTemplate::new("users://{user_id}/profile", "user-profile"),
-            ],
-            next_cursor: None,
-            meta: None,
-        })
+        Ok(ListResourceTemplatesResult::with_all_items(vec![
+            ResourceTemplate::new("users://{user_id}/profile", "user-profile"),
+        ]))
     }
 }
 ```
@@ -1756,7 +1752,7 @@ use rmcp::model::PaginatedRequestParams;
 let mut cursor = None;
 loop {
     let page = client
-        .list_tools(Some(PaginatedRequestParams { meta: None, cursor }))
+        .list_tools(Some(PaginatedRequestParams::default().with_cursor(cursor)))
         .await?;
     for tool in &page.tools {
         // handle each tool
