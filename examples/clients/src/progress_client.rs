@@ -283,6 +283,10 @@ async fn main() -> Result<()> {
     tracing::info!("RMCP Progress Notification Test Client");
     tracing::info!("==========================================");
 
+    run_transport_tests(&args).await
+}
+
+async fn run_transport_tests(args: &Args) -> Result<()> {
     match &args.transport {
         TransportType::All => {
             // Test all transport types
@@ -292,7 +296,7 @@ async fn main() -> Result<()> {
                 let transport_name = format!("{:?}", transport_type).to_uppercase();
                 tracing::info!("\n");
 
-                match run_single_test(&transport_type, &args).await {
+                match run_single_test(&transport_type, args).await {
                     Ok(success) => {
                         results.insert(transport_name, success);
                     }
@@ -314,11 +318,52 @@ async fn main() -> Result<()> {
                 let status = if *success { "PASSED" } else { "FAILED" };
                 tracing::info!("  {:<10}: {}", transport, status);
             }
+
+            anyhow::ensure!(
+                results.values().all(|success| *success),
+                "One or more transport tests failed",
+            );
         }
         transport_type => {
-            run_single_test(transport_type, &args).await?;
+            let success = run_single_test(transport_type, args).await?;
+            anyhow::ensure!(success, "{transport_type:?} transport test failed");
         }
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn http_failure_is_returned_to_the_command() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let address = listener.local_addr().expect("test server address");
+        let app = axum::Router::new().fallback(|| async { axum::http::StatusCode::NOT_FOUND });
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve test requests");
+        });
+        let args = Args {
+            transport: TransportType::Http,
+            records: 1,
+            http_url: format!("http://{address}/mcp"),
+        };
+
+        let result =
+            tokio::time::timeout(Duration::from_secs(10), run_transport_tests(&args)).await;
+        server.abort();
+
+        assert!(
+            result
+                .expect("HTTP failure should finish promptly")
+                .is_err(),
+            "a failed transport test must fail the command",
+        );
+    }
 }
